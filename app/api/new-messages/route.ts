@@ -11,11 +11,22 @@ export async function GET(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
-      const send = (obj: unknown) =>
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
-
       let timer: NodeJS.Timeout | null = null;
       let stopped = false;
+      const send = (obj: unknown) => {
+        if (!stopped) controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        if (timer) clearInterval(timer);
+        controller.close();
+      };
+      req.signal.addEventListener('abort', stop, { once: true });
+      if (req.signal.aborted) {
+        stop();
+        return;
+      }
 
       const tick = async () => {
         if (stopped) return;
@@ -39,13 +50,7 @@ export async function GET(req: NextRequest) {
       // Send initial heartbeat so the client knows the stream is open
       send({ type: 'open', interval });
       await tick();
-      timer = setInterval(tick, interval);
-
-      req.signal.addEventListener('abort', () => {
-        stopped = true;
-        if (timer) clearInterval(timer);
-        controller.close();
-      });
+      if (!stopped) timer = setInterval(tick, interval);
     },
   });
 
