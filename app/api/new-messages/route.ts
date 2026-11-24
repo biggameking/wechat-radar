@@ -7,15 +7,32 @@ export const maxDuration = 600;
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const interval = Math.max(Number(url.searchParams.get('interval') ?? 5000), 2000);
+  let stopPolling: (() => void) | undefined;
 
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
-      const send = (obj: unknown) =>
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
-
       let timer: NodeJS.Timeout | null = null;
       let stopped = false;
+      const send = (obj: unknown) => {
+        if (!stopped) controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        if (timer) clearInterval(timer);
+        req.signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        stop();
+        controller.close();
+      };
+      stopPolling = stop;
+      req.signal.addEventListener('abort', onAbort, { once: true });
+      if (req.signal.aborted) {
+        onAbort();
+        return;
+      }
 
       const tick = async () => {
         if (stopped) return;
@@ -39,13 +56,10 @@ export async function GET(req: NextRequest) {
       // Send initial heartbeat so the client knows the stream is open
       send({ type: 'open', interval });
       await tick();
-      timer = setInterval(tick, interval);
-
-      req.signal.addEventListener('abort', () => {
-        stopped = true;
-        if (timer) clearInterval(timer);
-        controller.close();
-      });
+      if (!stopped) timer = setInterval(tick, interval);
+    },
+    cancel() {
+      stopPolling?.();
     },
   });
 
