@@ -7,6 +7,7 @@ export const maxDuration = 600;
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const interval = Math.max(Number(url.searchParams.get('interval') ?? 5000), 2000);
+  let stopPolling: (() => void) | undefined;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -20,11 +21,16 @@ export async function GET(req: NextRequest) {
         if (stopped) return;
         stopped = true;
         if (timer) clearInterval(timer);
+        req.signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        stop();
         controller.close();
       };
-      req.signal.addEventListener('abort', stop, { once: true });
+      stopPolling = stop;
+      req.signal.addEventListener('abort', onAbort, { once: true });
       if (req.signal.aborted) {
-        stop();
+        onAbort();
         return;
       }
 
@@ -51,6 +57,9 @@ export async function GET(req: NextRequest) {
       send({ type: 'open', interval });
       await tick();
       if (!stopped) timer = setInterval(tick, interval);
+    },
+    cancel() {
+      stopPolling?.();
     },
   });
 

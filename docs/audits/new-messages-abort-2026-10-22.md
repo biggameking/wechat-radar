@@ -14,8 +14,9 @@ No real WeChat account, messages, CLI process, daemon, or database was used in t
 - Make stopping idempotent and close the stream once.
 - Do not enqueue late results after stopping.
 - Do not create an interval when the initial poll finishes after cancellation.
+- Stop polling and remove the request listener when the response reader cancels.
 
-Already-running wx calls are not forcibly terminated. The repair prevents later polling and late delivery; it does not add cancellation support to wx-cli itself. The separate stream-reader cancellation path and deployed Next.js disconnect propagation still require integration verification. Long-running polls overlapping each other are outside this repair.
+Already-running wx calls can finish in the background. The route discards their results and starts no further poll once stopped.
 
 ## Executed checks
 
@@ -32,9 +33,17 @@ During the initial-poll cancellation test, baseline wx-call count increased from
 Run from the repository with its development dependencies installed:
 
 ```sh
-node scripts/test-new-messages-abort.cjs --native-polling
+node scripts/test-new-messages-abort.mjs --native-polling
 ```
 
 To demonstrate the pre-fix behavior, pass a separately saved baseline route path and `--expect-baseline --native-polling`. Never point the test at personal data or invoke the wx CLI.
 
-Not run: full Next.js build/lint, production server, browser pause/navigation integration, real wx-cli, or macOS. Before merging, exercise pause and navigation while the initial read is slow in the normal local runtime, then verify subsequent normal live sessions still poll. No deployment or merge is implied by this source-level repair.
+## Local integration acceptance
+
+On macOS arm64, Node 24.22.1 and the locked Next.js 16.2.6 passed the production build and repository lint. The native regression passed all five cancellation cases. The two additional cases cancel the response reader during the first read and after the recurring timer starts. Both retained zero timers. The previously submitted candidate retained an interval when the active reader canceled.
+
+Chromium connected to the production build on loopback. A synthetic `wx` executable on the server's test-only PATH delayed `new-messages` until released and counted calls. Pausing during the first request and navigating to the groups page during a separate first request both left the call count unchanged for six seconds after release. A fresh session received a fixture message and polled again; its call count remained unchanged for six seconds after pausing. The repeat with the locked SQLite binding available also confirmed HTTP 200 for the sidebar stats.
+
+To repeat: install the frozen lockfile dependencies, build the existing `better-sqlite3` native binding as described in the README, and run `npm run build` then `npm run start -- --hostname 127.0.0.1`. Set `WECHAT_RADAR_DATA_DIR` to a disposable directory and put a synthetic `wx` executable first in PATH. Have it count and hold `new-messages` calls and return synthetic JSON for session reads. In `/signals`, pause or navigate away before releasing the first read. Observe the call count for longer than the five-second interval. Then reopen the page and observe a normal recurring poll.
+
+The acceptance covers local Next.js and Chromium with synthetic messages. Deployment-specific proxy behavior and overlap between slow polls remain outside this change.
